@@ -1,0 +1,71 @@
+# Security
+
+drop listens for hours at a time on a home machine: on the open internet through a port forward, or on a VPN address. This doc is the threat model and the list of controls. Each control names the test that enforces it. A control with no test is a wish, so add one. "Field record" at the end shows what an open port actually attracted during a real session.
+
+## What we protect
+
+1. **This machine.** Nothing a remote party sends may read, overwrite, or execute anything, write outside the inbox, or exhaust the disk, memory, or threads. Nothing drop does may leave the filesystem in a bad state, even when it crashes or loses power at any moment.
+2. **The file in transit.** Its confidentiality and integrity between the sender's browser and this disk.
+3. **The session.** Only someone with both the link and the key can upload.
+
+## Who we assume is out there
+
+- **Internet scanners.** Any open port gets probed within the hour; see "Field record". They must learn nothing and get nowhere. Over a VPN they can't reach drop at all.
+- **Other members of a VPN network.** On a shared Radmin, ZeroTier, or similar network, other members can reach the drop address. To them drop looks like it does to the internet: empty 404s without the token.
+- **A network observer between the sender and us** (public Wi-Fi, an ISP). They can read or alter cleartext traffic.
+- **Someone who got the link.** Assume it could leak, through chat history, a screenshot, or browser history. Without the key, they can load the page and nothing more. Their attempts show in the log as wrong-key warnings.
+- **A buggy or malicious client holding the link and the key.** It can still only write chunks of bounded files into the working folder.
+
+Out of scope: a compromised sender machine, and a compromised local machine. If the sender's file is itself malicious, that's a concern for when the user opens it. drop never opens, extracts, or executes what it receives.
+
+## Controls
+
+| # | Control | Enforced by |
+|---|---|---|
+| S1 | **TLS only.** A fresh ECDSA P-256 self-signed certificate each run, TLS 1.2 minimum, no plain-HTTP listener. (HTTP/2 is off for speed, not security.) The banner prints the certificate's SHA-256 fingerprint. | `TestNewCert`, `TestTLSServesHTTP1Only` (which also refuses TLS 1.1) |
+| S2 | **A 256-bit token** from `crypto/rand`, compared in constant time. The page is under `/t/{token}/`, and the API needs `Authorization: Bearer`. | `TestNewToken`, `TestWithoutTheTokenEverythingIsAnEmpty404` |
+| S3 | **Without the token, an empty 404.** That covers `/`, `/favicon.ico`, and any path. No `Server` header, no body, and no difference between a bad token, an unknown route, and a wrong method. | `TestWithoutTheTokenEverythingIsAnEmpty404`, `TestUnknownRoutesLookTheSameEvenWithTheToken` |
+| S4 | **The key, a second factor.** 60 random bits as `XXXX-XXXX-XXXX` in Crockford base32, fresh each run, required in `X-Drop-Key` on every API call, and compared in constant time after forgiving normalization. It travels by a *different channel* than the link. Only link holders ever reach the key check, so each wrong key logs a WARNING (throttled to one line per 30 s). The page remembers the key per link, so a new session never tries an old key. | `TestNewKey`, `TestKeyMatchesForgivesTyping`, `TestTheKeyIsRequiredForTheAPIButNotThePage` |
+| S5 | **Write-only.** No route returns uploaded bytes or lists the inbox. The full route set: the page's four static files, `POST /api/join`, `GET /api/lobby`, `POST /api/uploads`, `GET /api/uploads/{id}`, `PUT .../chunks/{i}`, and `POST .../finish`. | Route table in `server.go`, `TestUnknownRoutesLookTheSameEvenWithTheToken` |
+| S5a | **The lobby shows metadata only, to key holders only.** It covers who joined (cleaned name, address, latency) and this run's transfers (cleaned name, sender, size, progress, speed, final SHA-256). It never shows file contents, files from earlier runs, or anything else in the inbox. Names are cut to printable characters (control and text-direction characters dropped) and 32 characters, then placed with `textContent`, never parsed as markup. At most 64 people; anyone silent for 10 minutes is forgotten. | `TestTheLobbyShowsPeopleAndTransfers`, `TestCleanName`, `TestPeopleAreCappedAndForgotten`, `TestJoiningNeedsTheKey`, e2e `lobby` (a name made of markup stays text) |
+| S5b | **Listening is a deliberate choice.** drop won't start without `-addr` and lists the computer's adapters instead, marking VPN adapters. An `addr` saved in `drop.json` counts as that choice, made once by the person who wrote the file. Either way, the banner states who can reach the chosen address ("Tailscale only", or "every adapter ... and the internet if a port is forwarded") and names the settings file it read. | `TestDefaults`, `TestAdapterListExplainsTheChoice`, `TestReachDescription`, `TestDefaultSettingsFileIsReadFromTheCurrentFolder` |
+| S6 | **Server-owned paths.** Working files are `inbox/.incoming/{id}.part` and `{id}.state.json`, where `id` is hex the server derives. The sender's name is used only for the final name, after cleaning. Every character outside `[A-Za-z0-9 ._()-]` becomes `_`, so separators can't survive. Leading and trailing dots and spaces are trimmed, Windows device names get a `_` prefix, and the result is at most 200 bytes. Clean names can't start with a dot, so they can't collide with `.incoming`. | `TestSanitizeName`, `FuzzSanitizeName`, `TestCreateValidation` (a `../../evil.exe` name) |
+| S7 | **Never overwrite.** The final move is `MoveFile` on Windows (with the `\\?\` long-path form) and `link`+`unlink` on Unix. Both fail if the target exists, unlike `os.Rename`, which silently replaces on Windows. A taken name moves on to `name (1)`, `name (2)`, and so on. A move blocked by a file lock (antivirus) is retried for ~36 s. | `TestMoveNoReplaceRefusesAnExistingFile`, `TestFinishNeverOverwrites`, `TestTwoFilesWithTheSameNameBothSurvive`, `TestFinishWaitsOutAFileLock`, `TestLongPathForm` |
+| S8 | **Bounded disk.** Uploads are refused if they would leave less than `-keep-free` (default 10 GiB) on the inbox's drive, or pass `-max` (default 512 GiB) in one run. Files are preallocated, which reserves the space on NTFS, so writes can't run out midway. A refused upload leaves nothing behind. | `TestKeepsFreeSpaceInReserve`, `TestRunCapCountsEveryFileOnce`, `TestDiskReservationFailureIsClean` |
+| S9 | **Bounded time.** `ReadHeaderTimeout` 10 s (which also bounds the TLS handshake), `IdleTimeout` 120 s, and a 30 s body deadline per request. A chunk gets 10 min overall and never more than 60 s without a byte, so a dead connection releases its slot and its chunk within a minute. `MaxHeaderBytes` 16 KiB. | `TestSlowHeadersAreCut`, `TestAStalledChunkIsReleasedAndLoggedOnce` |
+| S10 | **Bounded concurrency, memory, and handles.** At most `-parallel × 2` chunks are in flight; the rest get `503` with `Retry-After`. Each holds one pooled chunk buffer, and startup refuses any `-chunk` × `-parallel` × 2 over 1 GiB. A resumed upload with bigger chunks than this run's is refused rather than allowed past that budget. At most 32 uploads per run (`429`), which bounds open files and working files. The same chunk can't be uploaded twice at once. | `TestBusyAndDuplicateChunks`, `TestChunkAlreadyInFlightOrNotReceiving`, `TestConfigValidation`, `TestTooManyUploadsInOneRun`, `TestResumeWithSmallerChunksIsRefusedWithAFix` |
+| S11 | **Integrity end to end.** Each chunk's SHA-256 is checked *before* writing, so mismatched or partial bytes never touch the file. Finish fsyncs, re-reads everything, re-checks every chunk, and hashes the whole file. Chunks that no longer match are reopened for a resend. | `TestABadChunkNeverReachesTheFile`, `TestVerifyCatchesCorruptionOnDisk`, `TestFinishVerifiesAndSavesUnderItsName` |
+| S12 | **Crash and power-loss safety.** The progress file is replaced via a temp file that is fsynced before the rename, so it is always old or new, never torn. Data is fsynced before verify, and verify catches any chunk the disk lost. Before the final move, the progress file records the destination, so a stop right after the move is recognized as finished. Only then is that one progress file cleared. A progress file that can't be read, or whose names or sizes aren't what drop would have written, is reported with the exact files to delete. It is never repaired or deleted automatically. Ctrl+C during verify stops quietly, and the next run resumes. | `TestLeftoverTempProgressFileIsHarmless`, `TestDamagedProgressIsReportedNeverOverwritten`, `TestUnsafeNamesInAProgressFileAreRefused`, `TestStoppedAfterTheMoveCountsAsFinished`, `TestStoppingMidVerifyIsQuietAndResumes`, e2e `restart` (drop killed mid-upload) |
+| S13 | **The inbox must exist** and be writable before the server opens. A missing junction is an error, never a silently created folder on another drive. | `TestResolveInboxRefusesMissingOrFile`, `TestResolveInboxFollowsJunction`, `TestNewPreparesAWritableWorkingFolder` |
+| S14 | **Exposure by the user's hand.** The server runs only while the user keeps it open. Ctrl+C shuts it down gracefully. The user opens and closes the port forward around the session (`runbook.md`), and the banner says whether the machine is reachable. | Review |
+| S15 | **Page hardening.** CSP `default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`, plus `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`. No inline script and no third-party anything. | `TestPageFilesAndSecurityHeaders` |
+| S16 | **No panics or 500s on input.** All parsing returns errors, store errors map to client codes in one table, and a recover handler logs instead of killing a transfer. | `FuzzCreateRequest`, `FuzzSanitizeName`, `TestChunkRequestValidation`, `TestEveryStoreErrorHasAnAnswer` |
+| S17 | **Quiet, useful logs.** Never log the token, the key, request paths, or a sender's raw filename (it could carry terminal control characters); logged names are always cleaned ones. Requests without the token are summarized once per 30 s, and wrong keys get a WARNING line. Expected network churn is logged calmly (a cut-off chunk is one line) or not at all (a retry while a chunk is in flight). Go's own TLS-handshake noise from scanners is discarded. | `TestAStalledChunkIsReleasedAndLoggedOnce`, `TestTheKeyIsRequiredForTheAPIButNotThePage`, plus the e2e checks for "nothing alarming in the log" |
+| S18 | **The settings file is the flags, saved.** `drop.json` (or `-config FILE`) holds only flag names, and every value goes through the flag's own parser and the same validation, so the file can't set anything the command line couldn't. An unknown key or a value that isn't a string or number stops drop with the file and key named. A flag on the command line wins over the file. The token and key are never read from or written to it: they're fresh every run. It's a local file written by the user, so it's trusted like the command line. | `TestSettingsFileFillsWhatTheCommandLineDoesNot`, `TestSettingsFileMistakesAreErrors`, `TestMissingSettingsFile`, `TestTheExampleSettingsFileIsValid` |
+
+## Deliberately not done
+
+- **No accounts or user-chosen passwords.** A per-run random key is stronger than anything typed in, and nothing has to be stored.
+- **No lockout after failed keys.** Only link holders can try a key, and 60 bits can't be guessed online: at 1,000 tries a second it would take over 30 million years. A lockout would let a link-leaker lock out the real sender. The WARNING line tells the user to press Ctrl+C instead.
+- **No CA-signed certificate.** That needs a domain and an ACME client, which means a dependency and a public DNS record. The click-through, plus the fingerprint and the key, covers the same threat for one known sender.
+- **No auto-shutdown.** A long transfer shouldn't end because a timer ran out. The token and key keep the session closed to everyone else, and `-max` and `-keep-free` bound what a leak could cost.
+- **No IP allowlist.** The sender's IP may change mid-transfer (mobile networks, DHCP).
+
+## Known risks, stated plainly
+
+- **The certificate is self-signed**, so the sender's first visit is trust-on-first-use. Someone able to intercept that first connection could impersonate drop. The sender can rule this out by comparing the browser's certificate fingerprint with the banner's `Certificate:` line, and the key (sent by another channel) never reaches an impersonator who doesn't also have it.
+- **The link and key last for the whole run**, not one use. Someone holding both could join the lobby and upload, bounded by `-max`, `-keep-free`, and 32 uploads. They still can't read or download anything. The lobby shows everyone who joins.
+- **A port forward exposes Go's HTTPS server** to the internet while drop runs. That is the same exposure as any self-hosted web service; drop adds the token in front of everything, and closes when Ctrl+C is pressed. Removing the forward afterwards keeps port 8443 from silently exposing anything else that later listens on it.
+
+## Field record (2026-10-13)
+
+The first real session ran for 9 hours through a router port forward on TCP 8443, carrying a 182.2 GB file. Everything that reached the port:
+
+| What | Count | Result |
+|---|---|---|
+| People who joined the lobby | 2 (the receiver and the sender) | As intended |
+| Requests with the link but a wrong key | 0 | No WARNING lines |
+| Requests without the link | 32, from 12 addresses | All an empty 404 (`rejected ... without the link`) |
+| Probes that never finished a TCP handshake (SYN scans) | At least 7 more addresses | Never reached drop, so not in its log |
+
+The sources named themselves where they could: research and inventory scanners (Shadowserver, Stretchoid, Modat, Visionheight, and a Palo Alto Networks range), plus unnamed hosts at Amazon, Azure, DigitalOcean, and other providers. One address probed every ~10 minutes for an hour. The first probe arrived about 40 minutes after the port opened, and new sources kept arriving at one or two per hour. None got past S3.

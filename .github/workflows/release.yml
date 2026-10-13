@@ -1,0 +1,48 @@
+name: release
+
+# Pushing a version tag (git tag v1.0.0 && git push origin v1.0.0) builds drop
+# for every platform and opens a draft release with the binaries and their
+# SHA-256 checksums. Nothing is public until the draft is published by hand.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          # go.mod's version is the minimum. Releases use the newest Go, so the
+          # binaries carry its latest net/http and crypto/tls fixes.
+          go-version: stable
+          cache: false
+      - name: test
+        run: go vet ./... && go test ./...
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 freebsd/amd64; do
+            os=${target%/*} arch=${target#*/}
+            name="drop-$VERSION-$os-$arch"
+            if [ "$os" = windows ]; then
+              GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "dist/$name.exe" ./cmd/drop
+            else
+              # A tarball keeps the executable bit, so it runs without chmod.
+              GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o build/drop ./cmd/drop
+              tar -czf "dist/$name.tar.gz" -C build drop
+              rm build/drop
+            fi
+          done
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --draft --verify-tag --generate-notes --title "drop ${{ github.ref_name }}"

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>drop</title>
+<!-- Without an icon of its own, the browser asks for /favicon.ico, which drop logs as a rejected request. -->
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>drop</h1>
+    <p class="lede">Send files straight to a friend's computer.</p>
+  </header>
+
+  <section id="step-loading">
+    <p class="muted">Loading...</p>
+  </section>
+
+  <section id="step-unsupported" hidden>
+    <h2>This browser can't send from here</h2>
+    <p>The page needs a secure (https) connection and a current browser. Open the exact link you were sent in an up-to-date Chrome, Edge, Firefox, or Safari.</p>
+  </section>
+
+  <section id="step-key" hidden>
+    <form id="key-form" class="key-form" novalidate>
+      <label for="name">Your name</label>
+      <input id="name" name="name" autocomplete="nickname" maxlength="32" placeholder="So others in the lobby know who you are">
+      <label for="key">Key</label>
+      <p class="muted">Your friend gave you a key separately, as 12 letters and numbers.</p>
+      <div class="row">
+        <input id="key" name="key" autocomplete="off" autocapitalize="characters" spellcheck="false"
+               placeholder="XXXX-XXXX-XXXX" maxlength="40" aria-describedby="key-error">
+        <button type="submit" id="key-button">Join</button>
+      </div>
+      <p id="key-error" class="error" role="alert"></p>
+    </form>
+  </section>
+
+  <div id="step-lobby" class="lobby" hidden>
+    <section class="panel">
+      <h2>People here</h2>
+      <ul id="people" class="people"></ul>
+      <p class="muted small">Latency is each person's round trip to this computer. Over a VPN, a high number (100+ ms) together with low speeds usually means the VPN is relaying traffic instead of connecting you directly.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Send a file</h2>
+
+      <div id="send-pick">
+        <label id="dropzone" class="dropzone" for="file">
+          <input type="file" id="file" class="visually-hidden">
+          <span class="dropzone-title">Drop a file here</span>
+          <span class="muted">or click to choose it</span>
+        </label>
+        <p id="file-error" class="error" role="alert"></p>
+        <p class="muted small">If anything interrupts it, choose the same file again: it picks up where it left off.</p>
+      </div>
+
+      <div id="send-progress" hidden>
+        <div class="file-line">
+          <span id="up-name" class="file-name"></span>
+          <span id="up-size" class="muted"></span>
+        </div>
+        <progress id="up-bar" max="1" value="0"></progress>
+        <div class="stats">
+          <span id="up-pct"></span>
+          <span id="up-bytes"></span>
+          <span id="up-rate"></span>
+          <span id="up-eta"></span>
+        </div>
+        <p id="up-state" class="state" role="status" aria-live="polite"></p>
+        <p class="muted small">Keep this tab open and your computer awake until it says done.</p>
+      </div>
+
+      <div id="send-done" hidden>
+        <p class="ok">Done. Your friend now has <strong id="done-name"></strong>, checked piece by piece and read back from their disk.</p>
+        <details>
+          <summary>Double-check it yourself (optional)</summary>
+          <p>Run this on your computer and compare the result with the fingerprint below.</p>
+          <pre id="done-command"></pre>
+        </details>
+        <p class="hash-label">SHA-256 fingerprint</p>
+        <code id="done-hash" class="hash"></code>
+        <p><button type="button" id="another">Send another file</button></p>
+      </div>
+
+      <div id="send-error" hidden>
+        <p id="send-error-text" class="error"></p>
+        <p><button type="button" id="try-again">Choose a file</button></p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Transfers</h2>
+      <ul id="transfers" class="transfers"></ul>
+      <p id="no-transfers" class="muted">Nothing yet.</p>
+    </section>
+  </div>
+
+  <section id="step-error" hidden>
+    <h2>Stopped</h2>
+    <p id="error-text"></p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

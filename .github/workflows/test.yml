@@ -1,0 +1,40 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Windows runners check files out with CRLF line endings, which gofmt
+      # reports as unformatted. Go source is LF on every platform.
+      - name: keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # drop has no dependencies, so there is no go.sum to cache by.
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
+      # The race detector needs cgo, which the Linux runner has out of the box.
+      - name: race
+        if: runner.os == 'Linux'
+        run: go test -race ./...

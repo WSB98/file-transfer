@@ -1,0 +1,9 @@
+{
+  "addr": ":8443",
+  "host": "203.0.113.7",
+  "inbox": "inbox",
+  "chunk": 32,
+  "parallel": 4,
+  "max": 512,
+  "keep-free": 10
+}

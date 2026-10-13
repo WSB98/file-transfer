@@ -1,0 +1,13 @@
+inbox/
+drop.exe
+/drop
+drop.json
+
+# Maintainer's working notes, kept locally only
+CLAUDE.md
+EXAMPLES.md
+.claude/
+docs/ARCHITECTURE.md
+docs/README.md
+docs/research/
+docs/imported/
