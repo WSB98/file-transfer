@@ -30,7 +30,7 @@ Some internet providers put many customers behind one shared address (**CGNAT**)
 
 **Providers that don't allow port forwarding** on their standard plans:
 - [T-Mobile Home Internet](https://www.t-mobile.com/support/home-internet/connect) says its gateway can't be configured for it.
-- Starlink uses CGNAT unless you're on a plan with a public IPv4 and use your own router ([Starlink help](https://starlink.com/support/article/e3e6bb65-2bbc-1c8a-0c42-74b4776a64f8)).
+- The Starlink router doesn't support port forwarding. You'd need your own router *and* a public IP on your Starlink service; standard service is CGNAT ([Starlink help](https://starlink.com/support/article/e3e6bb65-2bbc-1c8a-0c42-74b4776a64f8)).
 - Other 5G, LTE, and satellite home internet is usually the same.
 
 On these, use the VPN path.
